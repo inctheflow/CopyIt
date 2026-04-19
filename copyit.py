@@ -1,42 +1,31 @@
 #!/usr/bin/env python3
 """
-CopyIt: Select any area on screen, instantly copy the text.
+CopyIt - Select any area on screen, instantly copy the text.
+Uses Apple Vision OCR for high accuracy.
 Shortcut: Option+Shift+C
 """
 
 import sys
-import os
 import threading
 import subprocess
-import tempfile
-import time
 
-import Quartz
 import Quartz.CoreGraphics as CG
 from AppKit import (
     NSApplication, NSApp, NSWindow, NSView, NSColor, NSCursor,
     NSScreen, NSBezierPath, NSEvent, NSStatusBar, NSMenu, NSMenuItem,
-    NSImage, NSMakeRect, NSObject, NSRunLoop, NSDate,
+    NSMakeRect, NSObject,
     NSApplicationActivationPolicyAccessory,
     NSWindowStyleMaskBorderless, NSBackingStoreBuffered,
-    NSFloatingWindowLevel, NSEventMaskKeyDown, NSEventMaskFlagsChanged,
+    NSFloatingWindowLevel, NSEventMaskKeyDown,
 )
-from Foundation import NSTimer, NSThread
 import objc
-
-try:
-    import pytesseract
-    from PIL import Image
-    OCR_AVAILABLE = True
-except ImportError:
-    OCR_AVAILABLE = False
-    print("Warning: pytesseract or PIL not available")
+import Vision
+from Foundation import NSData
 
 
 #Screen capture
 
-def capture_region(x, y, w, h):
-    """Capture a region of the screen and return a PIL Image."""
+def capture_region_as_cgimage(x, y, w, h):
     region = CG.CGRectMake(x, y, w, h)
     image = CG.CGWindowListCreateImage(
         region,
@@ -44,32 +33,39 @@ def capture_region(x, y, w, h):
         CG.kCGNullWindowID,
         CG.kCGWindowImageDefault
     )
-    if image is None:
-        return None
-
-    width = CG.CGImageGetWidth(image)
-    height = CG.CGImageGetHeight(image)
-    bpr = CG.CGImageGetBytesPerRow(image)
-
-    data_provider = CG.CGImageGetDataProvider(image)
-    raw_data = CG.CGDataProviderCopyData(data_provider)
-    raw_bytes = bytes(raw_data)
-
-    from PIL import Image as PILImage
-    img = PILImage.frombytes("RGBA", (width, height), raw_bytes, "raw", "BGRA")
-    return img.convert("RGB")
+    return image
 
 
-def ocr_image(pil_image):
-    """Run OCR on a PIL image and return extracted text."""
-    text = pytesseract.image_to_string(pil_image, config="--psm 6")
-    return text.strip()
+def ocr_cgimage(cg_image):
+    """Use Apple Vision to OCR a CGImage. Returns extracted text string."""
+    results = []
+    done = threading.Event()
+
+    handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(
+        cg_image, {}
+    )
+
+    def completion(request, error):
+        if error:
+            done.set()
+            return
+        for obs in request.results():
+            results.append(obs.text())
+        done.set()
+
+    request = Vision.VNRecognizeTextRequest.alloc().initWithCompletionHandler_(completion)
+    request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+    request.setUsesLanguageCorrection_(True)
+
+    handler.performRequests_error_([request], None)
+    done.wait(timeout=10)
+
+    return "\n".join(results).strip()
 
 
-#Selection overlay window
+#Selection overlay
 
 class SelectionView(NSView):
-    """Transparent view that draws the selection rectangle."""
 
     def initWithFrame_(self, frame):
         self = objc.super(SelectionView, self).initWithFrame_(frame)
@@ -81,21 +77,14 @@ class SelectionView(NSView):
         return self
 
     def drawRect_(self, rect):
-        # Dark overlay
-        NSColor.colorWithCalibratedRed_green_blue_alpha_(0, 0, 0, 0.35).set()
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(0, 0, 0, 0.4).set()
         NSBezierPath.fillRect_(rect)
 
         if self.startPoint and self.currentPoint and self.isDragging:
             selRect = self._selectionRect()
-
-            # Clear the selected area (punch through overlay)
             NSColor.clearColor().set()
             NSBezierPath.fillRect_(selRect)
-
-            # Blue border
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.38, 0.70, 1.0, 1.0
-            ).set()
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.38, 0.70, 1.0, 1.0).set()
             path = NSBezierPath.bezierPathWithRect_(selRect)
             path.setLineWidth_(2.0)
             path.stroke()
@@ -124,7 +113,7 @@ class SelectionView(NSView):
         self.window().finishSelection_(self._selectionRect())
 
     def keyDown_(self, event):
-        if event.keyCode() == 53:  # Escape
+        if event.keyCode() == 53:
             self.window().cancelSelection()
 
     def acceptsFirstResponder(self):
@@ -132,28 +121,21 @@ class SelectionView(NSView):
 
 
 class OverlayWindow(NSWindow):
-    """Full-screen transparent window for selection."""
 
     def initForScreen_(self, screen):
         frame = screen.frame()
         self = objc.super(OverlayWindow, self).initWithContentRect_styleMask_backing_defer_(
-            frame,
-            NSWindowStyleMaskBorderless,
-            NSBackingStoreBuffered,
-            False
+            frame, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False
         )
         if self is None:
             return None
-
         self.setLevel_(NSFloatingWindowLevel + 1)
         self.setOpaque_(False)
         self.setBackgroundColor_(NSColor.clearColor())
         self.setIgnoresMouseEvents_(False)
         self.setAcceptsMouseMovedEvents_(True)
-
         self._screen = screen
         self._callback = None
-
         view = SelectionView.alloc().initWithFrame_(frame)
         self.setContentView_(view)
         return self
@@ -165,21 +147,16 @@ class OverlayWindow(NSWindow):
         return True
 
     def finishSelection_(self, rect):
-        """Called when user releases mouse — perform OCR."""
         if rect.size.width < 5 or rect.size.height < 5:
             self.cancelSelection()
             return
 
-        # Convert AppKit coords (bottom-left origin) to screen coords (top-left)
         screen_frame = self._screen.frame()
         screen_height = screen_frame.size.height
-
-        # Account for menu bar / screen origin
         ox = screen_frame.origin.x
         oy = screen_frame.origin.y
 
         x = int(ox + rect.origin.x)
-        # Flip Y: AppKit is bottom-left origin, CG is top-left
         y = int(screen_height - (rect.origin.y + rect.size.height) + oy)
         w = int(rect.size.width)
         h = int(rect.size.height)
@@ -187,25 +164,23 @@ class OverlayWindow(NSWindow):
         self.orderOut_(None)
         NSCursor.arrowCursor().set()
 
-        # Run OCR in background thread so UI stays responsive
         def do_ocr():
             try:
-                img = capture_region(x, y, w, h)
-                if img:
-                    text = ocr_image(img)
+                cg_image = capture_region_as_cgimage(x, y, w, h)
+                if cg_image:
+                    text = ocr_cgimage(cg_image)
                     if text:
                         copy_to_clipboard(text)
-                        notify("CopyIt ✓", f"Copied: {text[:60]}{'…' if len(text)>60 else ''}")
+                        notify("CopyIt ✓", f"Copied: {text[:60]}{'…' if len(text) > 60 else ''}")
                     else:
-                        notify("CopyIt", "No text found in selection")
+                        notify("CopyIt", "No text found — try selecting more area")
             except Exception as e:
-                notify("CopyIt", f"Error: {e}")
+                notify("CopyIt Error", str(e))
             finally:
                 if self._callback:
                     self._callback()
 
-        t = threading.Thread(target=do_ocr, daemon=True)
-        t.start()
+        threading.Thread(target=do_ocr, daemon=True).start()
 
     def cancelSelection(self):
         self.orderOut_(None)
@@ -214,7 +189,7 @@ class OverlayWindow(NSWindow):
             self._callback()
 
 
-#Clipboard & notifications
+# Clipboard & notifications
 
 def copy_to_clipboard(text):
     from AppKit import NSPasteboard, NSStringPboardType
@@ -224,19 +199,18 @@ def copy_to_clipboard(text):
 
 
 def notify(title, message):
-    """Show a macOS notification."""
+    message = message.replace('"', "'")
     script = f'display notification "{message}" with title "{title}"'
     subprocess.run(["osascript", "-e", script], capture_output=True)
 
 
-#App delegate & status bar
+#App delegate 
 
 class AppDelegate(NSObject):
 
     def applicationDidFinishLaunching_(self, notification):
         NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-        # Status bar icon
         self._statusItem = NSStatusBar.systemStatusBar().statusItemWithLength_(-1)
         self._statusItem.button().setTitle_("⌨️")
         self._statusItem.button().setToolTip_("CopyIt — Option+Shift+C to capture")
@@ -255,7 +229,6 @@ class AppDelegate(NSObject):
         menu.addItem_(quitItem)
         self._statusItem.setMenu_(menu)
 
-        # Global keyboard shortcut monitor (Option+Shift+C)
         mask = NSEventMaskKeyDown
 
         def handleKey(event):
@@ -274,7 +247,6 @@ class AppDelegate(NSObject):
         notify("CopyIt", "Running! Press Option+Shift+C to capture text.")
 
     def startCapture_(self, sender):
-        # Close any existing overlays
         for w in self._overlayWindows:
             try:
                 w.orderOut_(None)
@@ -291,7 +263,6 @@ class AppDelegate(NSObject):
             self._overlayWindows.append(win)
             win.makeKeyAndOrderFront_(None)
 
-        # Make sure key events work
         if self._overlayWindows:
             self._overlayWindows[0].makeKeyWindow()
 
@@ -307,14 +278,9 @@ class AppDelegate(NSObject):
         NSApp.terminate_(None)
 
 
-#Entry point
+# Entry Point
 
 if __name__ == "__main__":
-    if not OCR_AVAILABLE:
-        print("Error: Please install pillow and pytesseract first:")
-        print("  pip install pillow pytesseract")
-        sys.exit(1)
-
     app = NSApplication.sharedApplication()
     delegate = AppDelegate.alloc().init()
     app.setDelegate_(delegate)
