@@ -42,7 +42,7 @@ Works on:
 
 **1. Clone the repo**
 ```bash
-git clone https://github.com/yourusername/copyit.git
+git clone https://github.com/inctheflow/copyit.git
 cd copyit
 ```
 
