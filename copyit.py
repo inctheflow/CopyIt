@@ -178,9 +178,15 @@ class OverlayWindow(NSWindow):
                 notify("CopyIt Error", str(e))
             finally:
                 if self._callback:
-                    self._callback()
+                    self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                        "invokeCallback", None, False
+                    )
 
         threading.Thread(target=do_ocr, daemon=True).start()
+
+    def invokeCallback(self):
+        if self._callback:
+            self._callback()
 
     def cancelSelection(self):
         self.orderOut_(None)

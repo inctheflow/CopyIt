@@ -1,2 +1,4 @@
 venv/
 launch.sh
+com.copyit.app.plist
+*.sh
