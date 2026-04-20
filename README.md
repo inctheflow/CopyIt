@@ -34,7 +34,6 @@ Works on:
 
 - macOS Sequoia or later
 - Python 3.x
-- Homebrew
 
 ---
 
@@ -46,16 +45,11 @@ git clone https://github.com/inctheflow/copyit.git
 cd copyit
 ```
 
-**2. Install system dependencies**
-```bash
-brew install python tesseract
-```
-
-**3. Set up Python environment**
+**2. Set up Python environment**
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install pillow pytesseract pyobjc-framework-Quartz pyobjc-framework-Cocoa
+pip install pyobjc-framework-Quartz pyobjc-framework-Cocoa pyobjc-framework-Vision
 ```
 
 **4. Run**
@@ -111,9 +105,7 @@ Now it starts automatically every time your Mac boots.
 ## Stack
 
 - [PyObjC](https://pyobjc.readthedocs.io/) — Python bindings for macOS
-- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) — text recognition engine
-- [Pillow](https://python-pillow.org/) — image processing
-- [pytesseract](https://github.com/madmaze/pytesseract) — Python wrapper for Tesseract
+- [Apple Vision](https://developer.apple.com/documentation/vision) — on-device OCR (built into macOS)
 
 100% local. Nothing leaves your machine.
 
