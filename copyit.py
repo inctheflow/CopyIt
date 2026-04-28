@@ -37,8 +37,8 @@ def capture_region_as_cgimage(x, y, w, h):
 
 
 def ocr_cgimage(cg_image):
-    """Use Apple Vision to OCR a CGImage. Returns extracted text string."""
-    results = []
+    """Use Apple Vision to OCR a CGImage. Returns extracted text preserving spatial layout."""
+    observations = []
     done = threading.Event()
 
     handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(
@@ -50,7 +50,14 @@ def ocr_cgimage(cg_image):
             done.set()
             return
         for obs in request.results():
-            results.append(obs.text())
+            bbox = obs.boundingBox()  # normalized CGRect: origin bottom-left, y increases upward
+            observations.append({
+                'text': obs.text(),
+                'x': bbox.origin.x,
+                'y': bbox.origin.y,
+                'w': bbox.size.width,
+                'h': bbox.size.height,
+            })
         done.set()
 
     request = Vision.VNRecognizeTextRequest.alloc().initWithCompletionHandler_(completion)
@@ -60,7 +67,63 @@ def ocr_cgimage(cg_image):
     handler.performRequests_error_([request], None)
     done.wait(timeout=10)
 
-    return "\n".join(results).strip()
+    if not observations:
+        return ""
+
+    return reconstruct_layout(observations)
+
+
+def reconstruct_layout(observations):
+    """Reconstruct text layout from Vision observations using bounding box positions."""
+    # Sort top-to-bottom (Vision y=0 is bottom, so descending y = top of image first)
+    observations.sort(key=lambda o: (-o['y'], o['x']))
+
+    # Group observations into lines by clustering similar vertical positions
+    lines = []
+    used = set()
+
+    for i, obs in enumerate(observations):
+        if i in used:
+            continue
+        used.add(i)
+        line = [obs]
+        obs_mid_y = obs['y'] + obs['h'] / 2
+
+        for j, other in enumerate(observations):
+            if j in used:
+                continue
+            other_mid_y = other['y'] + other['h'] / 2
+            # Same line if vertical centers are within half the average height
+            threshold = (obs['h'] + other['h']) / 2 * 0.5
+            if abs(obs_mid_y - other_mid_y) <= threshold:
+                line.append(other)
+                used.add(j)
+
+        line.sort(key=lambda o: o['x'])
+        lines.append(line)
+
+    # Detect blank lines between sections by checking y-gaps
+    result = []
+    prev_line_bottom_y = None  # bottom edge of previous line (in Vision coords, higher = higher on screen)
+
+    for line in lines:
+        line_top_y = max(obs['y'] + obs['h'] for obs in line)
+        avg_height = sum(obs['h'] for obs in line) / len(line)
+
+        if prev_line_bottom_y is not None:
+            gap = prev_line_bottom_y - line_top_y
+            if gap > avg_height * 1.2:
+                result.append('')  # blank line between sections
+
+        if len(line) == 1:
+            result.append(line[0]['text'])
+        else:
+            # Tab-separate items on the same line to preserve column alignment
+            result.append('\t'.join(obs['text'] for obs in line))
+
+        prev_line_bottom_y = min(obs['y'] for obs in line)
+
+    return '\n'.join(result).strip()
 
 
 #Selection overlay
