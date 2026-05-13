@@ -312,7 +312,7 @@ def copy_to_clipboard(text):
 
 def notify(title, message):
     message = message.replace('"', "'")
-    script = f'display notification "{message}" with title "{title}"'
+    script = f'display notification "{message}" with title "{title}" sound name "Funk"'
     subprocess.run(["osascript", "-e", script], capture_output=True)
 
 
