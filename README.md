@@ -51,9 +51,8 @@ python3 -m venv venv
 source venv/bin/activate
 pip install pyobjc-framework-Quartz pyobjc-framework-Cocoa pyobjc-framework-Vision
 ```
-## 3. Run
 
-**4. Run**
+**3. Run**
 ```bash
 chmod +x launch.sh
 ./launch.sh
