@@ -54,10 +54,13 @@ pip install pyobjc-framework-Quartz pyobjc-framework-Cocoa pyobjc-framework-Visi
 
 **4. Run**
 ```bash
-python3 copyit.py
+chmod +x launch.sh
+./launch.sh
 ```
 
 A ⌨️ icon appears in your menu bar. You're ready.
+
+> `launch.sh` activates the venv and runs CopyIt in the background. Output is logged to `/tmp/copyit.log`.
 
 ---
 
@@ -93,7 +96,7 @@ So you never have to think about it:
 1. Open **Automator** → New Document → **Application**
 2. Add **Run Shell Script** and paste:
 ```bash
-cd ~/path/to/copyit && source venv/bin/activate && python3 copyit.py
+~/Desktop/CopyIt/launch.sh
 ```
 3. Save it somewhere (e.g. Desktop)
 4. **System Settings → General → Login Items → +** → add the saved app
