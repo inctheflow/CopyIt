@@ -5,9 +5,11 @@ Uses Apple Vision OCR for high accuracy.
 Shortcut: Option+Shift+C
 """
 
+import os
 import sys
 import threading
 import subprocess
+from datetime import datetime
 
 import Quartz.CoreGraphics as CG
 from AppKit import (
@@ -21,6 +23,46 @@ from AppKit import (
 import objc
 import Vision
 from Foundation import NSData
+
+
+# History
+
+HISTORY_FILE = os.path.expanduser("~/.copyit_history")
+HISTORY_MAX  = 50
+HISTORY_MENU = 10
+
+def append_history(text):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    single_line = text.replace('\n', ' ').replace('\r', ' ')
+    entry = f"[{timestamp}] {single_line}"
+    try:
+        lines = []
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                lines = [l.rstrip('\n') for l in f if l.strip()]
+        lines.append(entry)
+        lines = lines[-HISTORY_MAX:]
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines) + '\n')
+    except Exception:
+        pass
+
+def read_history(n=HISTORY_MENU):
+    try:
+        if not os.path.exists(HISTORY_FILE):
+            return []
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            lines = [l.rstrip('\n') for l in f if l.strip()]
+        return list(reversed(lines[-n:]))
+    except Exception:
+        return []
+
+def clear_history():
+    try:
+        if os.path.exists(HISTORY_FILE):
+            os.remove(HISTORY_FILE)
+    except Exception:
+        pass
 
 
 #Screen capture
@@ -234,6 +276,7 @@ class OverlayWindow(NSWindow):
                     text = ocr_cgimage(cg_image)
                     if text:
                         copy_to_clipboard(text)
+                        append_history(text)
                         notify("CopyIt ✓", f"Copied: {text[:60]}{'…' if len(text) > 60 else ''}")
                     else:
                         notify("CopyIt", "No text found — try selecting more area")
@@ -291,6 +334,16 @@ class AppDelegate(NSObject):
         captureItem.setTarget_(self)
         menu.addItem_(captureItem)
         menu.addItem_(NSMenuItem.separatorItem())
+
+        self._historyMenu = NSMenu.alloc().init()
+        self._historyMenu.setDelegate_(self)
+        historyMenuItem = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "History", None, ""
+        )
+        historyMenuItem.setSubmenu_(self._historyMenu)
+        menu.addItem_(historyMenuItem)
+        menu.addItem_(NSMenuItem.separatorItem())
+
         quitItem = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Quit CopyIt", "quitApp:", ""
         )
@@ -342,6 +395,45 @@ class AppDelegate(NSObject):
             except Exception:
                 pass
         self._overlayWindows = []
+
+    def menuWillOpen_(self, menu):
+        if menu == self._historyMenu:
+            self._refreshHistoryMenu()
+
+    def _refreshHistoryMenu(self):
+        self._historyMenu.removeAllItems()
+        entries = read_history()
+        if not entries:
+            empty = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                "No history yet", None, ""
+            )
+            empty.setEnabled_(False)
+            self._historyMenu.addItem_(empty)
+        else:
+            for entry in entries:
+                label = entry[entry.index('] ') + 2:] if ('] ' in entry) else entry
+                truncated = label[:40] + ('…' if len(label) > 40 else '')
+                item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+                    truncated, "copyHistoryItem:", ""
+                )
+                item.setTarget_(self)
+                item.setRepresentedObject_(entry)
+                self._historyMenu.addItem_(item)
+        self._historyMenu.addItem_(NSMenuItem.separatorItem())
+        clearItem = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Clear History", "clearHistory:", ""
+        )
+        clearItem.setTarget_(self)
+        self._historyMenu.addItem_(clearItem)
+
+    def copyHistoryItem_(self, sender):
+        entry = sender.representedObject()
+        text = entry[entry.index('] ') + 2:] if ('] ' in entry) else entry
+        copy_to_clipboard(text)
+        notify("CopyIt", f"Copied: {text[:60]}{'…' if len(text) > 60 else ''}")
+
+    def clearHistory_(self, sender):
+        clear_history()
 
     def quitApp_(self, sender):
         NSApp.terminate_(None)
