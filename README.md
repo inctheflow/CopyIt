@@ -2,6 +2,8 @@
 
 > Copy text from anywhere on your screen — even when the app won't let you.
 
+![CopyIt Demo](assets/demo.gif)
+
 ---
 
 ## The problem
