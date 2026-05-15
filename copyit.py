@@ -312,8 +312,9 @@ def copy_to_clipboard(text):
 
 def notify(title, message):
     message = message.replace('"', "'")
+    title = title.replace('"', "'")
     script = f'display notification "{message}" with title "{title}" sound name "Funk"'
-    subprocess.run(["osascript", "-e", script], capture_output=True)
+    subprocess.Popen(["osascript", "-e", script])
 
 
 #App delegate 
@@ -386,7 +387,15 @@ class AppDelegate(NSObject):
             win.makeKeyAndOrderFront_(None)
 
         if self._overlayWindows:
-            self._overlayWindows[0].makeKeyWindow()
+            mouse_loc = NSEvent.mouseLocation()
+            target = self._overlayWindows[0]
+            for win in self._overlayWindows:
+                sf = win._screen.frame()
+                if (sf.origin.x <= mouse_loc.x < sf.origin.x + sf.size.width and
+                        sf.origin.y <= mouse_loc.y < sf.origin.y + sf.size.height):
+                    target = win
+                    break
+            target.makeKeyWindow()
 
     def _captureFinished(self):
         for w in self._overlayWindows:
